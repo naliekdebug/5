@@ -1,0 +1,36 @@
+{
+  "data": {
+    "provider": "synthetic",
+    "symbol": "XAUUSD",
+    "n_bars": 5000,
+    "start_price": 2000.0,
+    "drift": 1e-05,
+    "volatility": 0.0012,
+    "timeframe_minutes": 1,
+    "seed": 7,
+    "path": null,
+    "time_col": null
+  },
+  "strategy": {
+    "name": "ema_crossover",
+    "params": {}
+  },
+  "broker": {
+    "commission_per_unit": 0.0,
+    "commission_rate": 0.0002,
+    "slippage_bps": 1.0,
+    "multiplier": 1.0
+  },
+  "risk": {
+    "risk_per_trade": 0.01,
+    "max_gross_exposure": 1.0,
+    "max_daily_loss": 0.05,
+    "max_drawdown": 0.25,
+    "fallback_stop_pct": 0.02,
+    "flatten_on_halt": true
+  },
+  "account": {
+    "starting_cash": 100000.0,
+    "multiplier": 1.0
+  }
+}
