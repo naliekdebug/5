@@ -1,0 +1,135 @@
+//@version=5
+// =====================================================================
+//  Buy/Sell Indicator — Trend + Momentum Signals
+//  Works on ANY asset and ANY timeframe.
+//
+//  Signal logic (all conditions must agree):
+//    • Trend:      Fast EMA crosses / holds above Slow EMA
+//    • Momentum:   RSI confirms direction (above/below midline)
+//    • Higher-TF:  Optional trend filter from a higher timeframe EMA
+//    • Volatility: Optional ATR floor to skip dead markets
+//
+//  Extras:
+//    • BUY / SELL labels on the chart + bar coloring
+//    • Optional ATR-based stop-loss / take-profit guide lines
+//    • Alert conditions for automation (webhooks, app notifications)
+//
+//  All thresholds are ATR- or percent-based so the same settings
+//  behave consistently on FX, crypto, indices, stocks, gold, etc.
+// =====================================================================
+indicator("Buy/Sell Indicator — Trend + Momentum", shorttitle="Buy/Sell", overlay=true,
+     max_labels_count=500)
+
+// ---------------------------------------------------------------------
+// INPUTS
+// ---------------------------------------------------------------------
+grpTrend = "── Trend (EMA cross) ──"
+fastLen   = input.int(21, "Fast EMA length", minval=2, group=grpTrend)
+slowLen   = input.int(50, "Slow EMA length", minval=3, group=grpTrend)
+showEMAs  = input.bool(true, "Plot EMAs", group=grpTrend)
+
+grpMom = "── Momentum (RSI) ──"
+useRSI    = input.bool(true, "Use RSI filter", group=grpMom, tooltip="Require RSI above 50 for buys / below 50 for sells. Blocks counter-momentum signals.")
+rsiLen    = input.int(14, "RSI length", minval=2, group=grpMom)
+rsiBuyMax = input.int(70, "Skip buys when RSI above", minval=50, maxval=100, group=grpMom, tooltip="Avoid buying into overbought conditions.")
+rsiSellMin= input.int(30, "Skip sells when RSI below", minval=0, maxval=50, group=grpMom, tooltip="Avoid selling into oversold conditions.")
+
+grpHTF = "── Higher-timeframe filter ──"
+useHTF    = input.bool(true, "Use higher-TF trend filter", group=grpHTF, tooltip="Only buy when price is above the higher-timeframe EMA, only sell when below. Cuts counter-trend signals.")
+htfTF     = input.timeframe("240", "Higher timeframe", group=grpHTF)
+htfLen    = input.int(50, "Higher-TF EMA length", minval=3, group=grpHTF)
+
+grpVol = "── Volatility filter ──"
+useATRfloor = input.bool(false, "Require minimum volatility", group=grpVol, tooltip="Skip signals when ATR is below its own average — filters flat, choppy markets.")
+atrLen      = input.int(14, "ATR length", minval=1, group=grpVol)
+atrFloorMult= input.float(0.8, "Min ATR (× ATR average)", minval=0.1, step=0.1, group=grpVol)
+
+grpRisk = "── Trade guide (optional) ──"
+showLevels = input.bool(true, "Show SL/TP guide lines on signal", group=grpRisk)
+slMult     = input.float(1.5, "Stop loss (× ATR)", minval=0.1, step=0.1, group=grpRisk)
+tpMult     = input.float(2.25, "Take profit (× ATR)", minval=0.1, step=0.1, group=grpRisk)
+
+grpStyle = "── Style ──"
+colorBars = input.bool(true, "Color bars by trend", group=grpStyle)
+buyCol    = input.color(color.new(color.teal, 0), "Buy color", group=grpStyle, inline="c")
+sellCol   = input.color(color.new(color.red, 0), "Sell color", group=grpStyle, inline="c")
+
+// ---------------------------------------------------------------------
+// CALCULATIONS
+// ---------------------------------------------------------------------
+emaFast = ta.ema(close, fastLen)
+emaSlow = ta.ema(close, slowLen)
+rsi     = ta.rsi(close, rsiLen)
+atr     = ta.atr(atrLen)
+
+// Higher-timeframe EMA (no repainting: value from the last CLOSED HTF bar)
+htfEma = request.security(syminfo.tickerid, htfTF, ta.ema(close, htfLen)[1],
+     lookahead=barmerge.lookahead_on)
+
+// Filters
+bullTrend = emaFast > emaSlow
+bearTrend = emaFast < emaSlow
+
+rsiBuyOK  = not useRSI or (rsi > 50 and rsi < rsiBuyMax)
+rsiSellOK = not useRSI or (rsi < 50 and rsi > rsiSellMin)
+
+htfBuyOK  = not useHTF or close > htfEma
+htfSellOK = not useHTF or close < htfEma
+
+volOK = not useATRfloor or atr >= ta.sma(atr, 50) * atrFloorMult
+
+// Raw crossover triggers
+crossUp   = ta.crossover(emaFast, emaSlow)
+crossDown = ta.crossunder(emaFast, emaSlow)
+
+// A signal also fires when the filters ALIGN after the cross (momentum /
+// HTF catching up), not only on the exact cross bar. State machine keeps
+// one signal per swing: no repeated buys while already long-biased.
+var int bias = 0   // 1 after a buy, -1 after a sell, 0 = none yet
+
+buySetup  = bullTrend and rsiBuyOK  and htfBuyOK  and volOK and barstate.isconfirmed
+sellSetup = bearTrend and rsiSellOK and htfSellOK and volOK and barstate.isconfirmed
+
+buySignal  = buySetup  and bias != 1
+sellSignal = sellSetup and bias != -1
+
+if buySignal
+    bias := 1
+if sellSignal
+    bias := -1
+
+// ---------------------------------------------------------------------
+// PLOTS
+// ---------------------------------------------------------------------
+plot(showEMAs ? emaFast : na, "Fast EMA", color=color.new(buyCol, 30), linewidth=1)
+plot(showEMAs ? emaSlow : na, "Slow EMA", color=color.new(sellCol, 30), linewidth=2)
+
+plotshape(buySignal, "BUY", style=shape.labelup, location=location.belowbar,
+     color=buyCol, textcolor=color.white, text="BUY", size=size.small)
+plotshape(sellSignal, "SELL", style=shape.labeldown, location=location.abovebar,
+     color=sellCol, textcolor=color.white, text="SELL", size=size.small)
+
+barcolor(colorBars ? (bullTrend ? color.new(buyCol, 40) : bearTrend ? color.new(sellCol, 40) : na) : na)
+
+// SL/TP guide lines drawn at each signal
+if showLevels and buySignal
+    sl = close - atr * slMult
+    tp = close + atr * tpMult
+    line.new(bar_index, sl, bar_index + 10, sl, color=color.new(sellCol, 20), style=line.style_dashed)
+    line.new(bar_index, tp, bar_index + 10, tp, color=color.new(buyCol, 20), style=line.style_dashed)
+    label.new(bar_index + 10, sl, "SL " + str.tostring(sl, format.mintick), style=label.style_label_left, color=color.new(sellCol, 70), textcolor=color.white, size=size.tiny)
+    label.new(bar_index + 10, tp, "TP " + str.tostring(tp, format.mintick), style=label.style_label_left, color=color.new(buyCol, 70), textcolor=color.white, size=size.tiny)
+if showLevels and sellSignal
+    sl = close + atr * slMult
+    tp = close - atr * tpMult
+    line.new(bar_index, sl, bar_index + 10, sl, color=color.new(sellCol, 20), style=line.style_dashed)
+    line.new(bar_index, tp, bar_index + 10, tp, color=color.new(buyCol, 20), style=line.style_dashed)
+    label.new(bar_index + 10, sl, "SL " + str.tostring(sl, format.mintick), style=label.style_label_left, color=color.new(sellCol, 70), textcolor=color.white, size=size.tiny)
+    label.new(bar_index + 10, tp, "TP " + str.tostring(tp, format.mintick), style=label.style_label_left, color=color.new(buyCol, 70), textcolor=color.white, size=size.tiny)
+
+// ---------------------------------------------------------------------
+// ALERTS
+// ---------------------------------------------------------------------
+alertcondition(buySignal,  "Buy signal",  "Buy/Sell Indicator: BUY {{ticker}} @ {{close}} ({{interval}})")
+alertcondition(sellSignal, "Sell signal", "Buy/Sell Indicator: SELL {{ticker}} @ {{close}} ({{interval}})")
+alertcondition(buySignal or sellSignal, "Any signal", "Buy/Sell Indicator: signal on {{ticker}} @ {{close}} ({{interval}})")
